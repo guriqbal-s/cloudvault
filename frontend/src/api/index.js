@@ -1,0 +1,17 @@
+// Convenience barrel: import { filesApi, foldersApi } from '../api';
+export * as authApi from './auth.js';
+export * as usersApi from './users.js';
+export * as foldersApi from './folders.js';
+export * as filesApi from './files.js';
+export * as trashApi from './trash.js';
+export * as starredApi from './starred.js';
+export * as recentApi from './recent.js';
+export * as searchApi from './search.js';
+export * as storageApi from './storage.js';
+export * as sharesApi from './shares.js';
+export * as publicLinksApi from './publicLinks.js';
+export * as notificationsApi from './notifications.js';
+export * as activityApi from './activity.js';
+export * as dashboardApi from './dashboard.js';
+export * as adminApi from './admin.js';
+export { api, refreshSession, getAccessToken } from './client.js';

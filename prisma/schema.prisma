@@ -1,0 +1,505 @@
+// CloudVault database schema (PostgreSQL via Prisma).
+//
+// Things Prisma cannot express are added by prisma/extras.sql, which the
+// db-setup script appends to the initial migration:
+//   - pg_trgm extension + trigram indexes for fast name search
+//   - partial unique indexes (unique names among NON-deleted siblings)
+//   - CHECK constraints (exactly-one-target on share links / stars, etc.)
+//   - text_pattern_ops index on folders.path for descendant lookups
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum ShareRole {
+  VIEWER
+  EDITOR
+}
+
+enum ResourceType {
+  FILE
+  FOLDER
+}
+
+enum NotificationType {
+  FILE_SHARED
+  FOLDER_SHARED
+  SHARED_FILE_UPDATED
+  PERMISSION_CHANGED
+  ACCESS_REVOKED
+  UPLOAD_COMPLETED
+  UPLOAD_FAILED
+  STORAGE_WARNING
+  SYSTEM
+}
+
+enum ActivityAction {
+  LOGIN
+  LOGOUT
+  REGISTER
+  FILE_UPLOAD
+  FILE_DOWNLOAD
+  FILE_DELETE
+  FILE_RESTORE
+  FILE_PERMANENT_DELETE
+  FILE_RENAME
+  FILE_MOVE
+  FILE_COPY
+  FOLDER_CREATE
+  FOLDER_RENAME
+  FOLDER_MOVE
+  FOLDER_COPY
+  FOLDER_DELETE
+  FOLDER_RESTORE
+  FOLDER_PERMANENT_DELETE
+  SHARE_CREATE
+  SHARE_UPDATE
+  SHARE_REVOKE
+  LINK_CREATE
+  LINK_REVOKE
+  LINK_ACCESS
+  VERSION_CREATE
+  VERSION_RESTORE
+  VERSION_DELETE
+  PROFILE_UPDATE
+  PASSWORD_CHANGE
+  STAR
+  UNSTAR
+  ADMIN_ROLE_CHANGE
+  ADMIN_USER_STATUS_CHANGE
+  ADMIN_QUOTA_CHANGE
+}
+
+// ---------------------------------------------------------------------
+// Identity, RBAC and sessions
+// ---------------------------------------------------------------------
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique // stored lower-cased by the service layer
+  name              String
+  passwordHash      String
+  avatarKey         String? // storage key of the profile picture
+  status            UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt   DateTime?
+  storageQuotaBytes BigInt     @default(5368709120)
+  // Denormalised counter: sum of the size of ALL versions of all files the user owns
+  // (trashed items count until they are purged). Updated inside upload/delete transactions.
+  storageUsedBytes  BigInt     @default(0)
+  themePref         String     @default("system") // light | dark | system
+  notificationPrefs Json       @default("{}")
+  lastLoginAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  roles                  UserRole[]
+  ownedFolders           Folder[]                 @relation("FolderOwner")
+  deletedFolders         Folder[]                 @relation("FolderDeletedBy")
+  ownedFiles             File[]                   @relation("FileOwner")
+  deletedFiles           File[]                   @relation("FileDeletedBy")
+  uploadedVersions       FileVersion[]            @relation("VersionUploader")
+  fileSharesReceived     FileShare[]              @relation("FileShareRecipient")
+  fileSharesGiven        FileShare[]              @relation("FileShareSharer")
+  folderSharesReceived   FolderShare[]            @relation("FolderShareRecipient")
+  folderSharesGiven      FolderShare[]            @relation("FolderShareSharer")
+  shareLinks             ShareLink[]
+  notifications          Notification[]
+  activityLogs           ActivityLog[]
+  refreshTokens          RefreshToken[]
+  passwordResetTokens    PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  sessions               UserSession[]
+  storageUsage           StorageUsage[]
+  starred                StarredResource[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  // Higher rank = more privileged. An actor may only manage users ranked below them.
+  rank        Int      @default(0)
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique // e.g. "file:upload"
+  group       String // UI grouping, e.g. "Files"
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model UserSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  userAgent    String?
+  ip           String?
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@map("user_sessions")
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  sessionId    String    @db.Uuid
+  tokenHash    String    @unique // SHA-256 of the opaque token; the raw token is never stored
+  familyId     String    @db.Uuid // all rotations of one login share a family (reuse detection)
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session UserSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// ---------------------------------------------------------------------
+// Folders, files and versions
+// ---------------------------------------------------------------------
+
+model Folder {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String
+  ownerId      String    @db.Uuid
+  parentId     String?   @db.Uuid // null = top level of the owner's drive
+  // Materialised path of folder ids including itself, e.g. "/<rootId>/<childId>/".
+  // Descendants of F are: path LIKE F.path || '%' (indexed with text_pattern_ops).
+  path         String
+  deletedAt    DateTime?
+  deletedById  String?   @db.Uuid
+  // Folder + all its descendants share one batch id so restore/purge act on the batch.
+  trashBatchId String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  owner     User          @relation("FolderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  deletedBy User?         @relation("FolderDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  parent    Folder?       @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[]      @relation("FolderTree")
+  files     File[]
+  shares    FolderShare[]
+  links     ShareLink[]
+  starred   StarredResource[]
+
+  @@index([ownerId, parentId])
+  @@index([ownerId, deletedAt])
+  @@index([trashBatchId])
+  @@map("folders")
+}
+
+model File {
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String
+  ownerId          String    @db.Uuid
+  folderId         String?   @db.Uuid // null = top level of the owner's drive
+  mimeType         String
+  extension        String // lower-case, without the dot
+  size             BigInt // mirrors the current version
+  currentVersionId String?   @unique @db.Uuid
+  lastAccessedAt   DateTime?
+  deletedAt        DateTime?
+  deletedById      String?   @db.Uuid
+  trashBatchId     String?   @db.Uuid
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt // "last modified"
+
+  owner          User          @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  deletedBy      User?         @relation("FileDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  folder         Folder?       @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  versions       FileVersion[] @relation("FileVersions")
+  currentVersion FileVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  shares         FileShare[]
+  links          ShareLink[]
+  starred        StarredResource[]
+
+  @@index([ownerId, deletedAt, folderId])
+  @@index([folderId])
+  @@index([ownerId, createdAt])
+  @@index([ownerId, lastAccessedAt])
+  @@index([extension])
+  @@index([trashBatchId])
+  @@map("files")
+}
+
+model FileVersion {
+  id            String   @id @default(uuid()) @db.Uuid
+  fileId        String   @db.Uuid
+  versionNumber Int
+  storageKey    String   @unique // opaque key understood by the StorageProvider (disk path or S3 key)
+  size          BigInt
+  mimeType      String
+  checksum      String // SHA-256 hex of the content
+  uploadedById  String   @db.Uuid
+  comment       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  file       File  @relation("FileVersions", fields: [fileId], references: [id], onDelete: Cascade)
+  currentOf  File? @relation("CurrentVersion")
+  uploadedBy User  @relation("VersionUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([fileId, versionNumber])
+  @@index([uploadedById])
+  @@index([createdAt])
+  @@map("file_versions")
+}
+
+// ---------------------------------------------------------------------
+// Sharing
+// ---------------------------------------------------------------------
+
+model FileShare {
+  id           String    @id @default(uuid()) @db.Uuid
+  fileId       String    @db.Uuid
+  sharedWithId String    @db.Uuid
+  sharedById   String    @db.Uuid
+  role         ShareRole @default(VIEWER)
+  canDownload  Boolean   @default(true) // "download if permitted"
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  file       File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  sharedWith User @relation("FileShareRecipient", fields: [sharedWithId], references: [id], onDelete: Cascade)
+  sharedBy   User @relation("FileShareSharer", fields: [sharedById], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, sharedWithId])
+  @@index([sharedWithId])
+  @@index([sharedById])
+  @@map("file_shares")
+}
+
+model FolderShare {
+  id           String    @id @default(uuid()) @db.Uuid
+  folderId     String    @db.Uuid
+  sharedWithId String    @db.Uuid
+  sharedById   String    @db.Uuid
+  role         ShareRole @default(VIEWER)
+  canDownload  Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  folder     Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  sharedWith User   @relation("FolderShareRecipient", fields: [sharedWithId], references: [id], onDelete: Cascade)
+  sharedBy   User   @relation("FolderShareSharer", fields: [sharedById], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, sharedWithId])
+  @@index([sharedWithId])
+  @@index([sharedById])
+  @@map("folder_shares")
+}
+
+model ShareLink {
+  id             String       @id @default(uuid()) @db.Uuid
+  token          String       @unique // high-entropy random string used in /s/:token
+  resourceType   ResourceType
+  fileId         String?      @db.Uuid
+  folderId       String?      @db.Uuid
+  createdById    String       @db.Uuid
+  role           ShareRole    @default(VIEWER) // links are view-only for now
+  allowDownload  Boolean      @default(true)
+  passwordHash   String? // bcrypt hash when the link is password protected
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  accessCount    Int          @default(0)
+  lastAccessedAt DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  file      File?   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folder    Folder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([createdById])
+  @@index([fileId])
+  @@index([folderId])
+  @@index([expiresAt])
+  @@map("share_links")
+}
+
+model StarredResource {
+  id           String       @id @default(uuid()) @db.Uuid
+  userId       String       @db.Uuid
+  resourceType ResourceType
+  fileId       String?      @db.Uuid
+  folderId     String?      @db.Uuid
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file   File?   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folder Folder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fileId])
+  @@unique([userId, folderId])
+  @@index([userId, createdAt])
+  @@map("starred_resources")
+}
+
+// ---------------------------------------------------------------------
+// Notifications, activity and storage analytics
+// ---------------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  type      NotificationType
+  title     String
+  body      String
+  data      Json? // deep-link info: { resourceType, resourceId, actorId, ... }
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model ActivityLog {
+  id           String         @id @default(uuid()) @db.Uuid
+  userId       String?        @db.Uuid // null if the user was later deleted; logs are kept
+  action       ActivityAction
+  resourceType ResourceType?
+  resourceId   String?        @db.Uuid // deliberately NOT a foreign key: logs outlive resources
+  resourceName String? // snapshot of the name at the time of the action
+  description  String
+  metadata     Json?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// One row per user per UTC day. Written by the nightly snapshot job (and by the seed).
+// Powers the storage-usage and upload-activity charts without scanning every file.
+model StorageUsage {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  date          DateTime @db.Date
+  bytesUsed     BigInt
+  fileCount     Int
+  folderCount   Int
+  bytesUploaded BigInt   @default(0)
+  filesUploaded Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([date])
+  @@map("storage_usage")
+}
