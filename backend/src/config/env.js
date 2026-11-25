@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
+import { cloudinaryCredentials, isPlaceholder } from '../services/storage/cloudinaryConfig.js';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, '..', '..', '..');
 
@@ -29,6 +31,8 @@ const schema = z
     TRUST_PROXY: bool(false),
 
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+    // Optional. Set to run more than one API instance (shared rate limits, sockets, job locks).
+    REDIS_URL: z.preprocess(blankToUndefined, z.string().regex(/^rediss?:\/\//, 'must start with redis:// or rediss://').optional()),
 
     JWT_ACCESS_SECRET: z.string().min(16, 'must be at least 16 characters'),
     JWT_ACCESS_EXPIRES: str('15m'),
@@ -39,8 +43,14 @@ const schema = z
     PASSWORD_RESET_MINUTES: int(60, { min: 1 }),
     EMAIL_VERIFICATION_HOURS: int(24, { min: 1 }),
 
-    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    STORAGE_DRIVER: z.enum(['local', 'cloudinary', 's3']).default('local'),
     STORAGE_ROOT: str('./storage'),
+    // Either CLOUDINARY_URL (cloudinary://KEY:SECRET@CLOUD_NAME) or the three separate values.
+    CLOUDINARY_URL: str(''),
+    CLOUDINARY_CLOUD_NAME: str(''),
+    CLOUDINARY_API_KEY: str(''),
+    CLOUDINARY_API_SECRET: str(''),
+    CLOUDINARY_FOLDER: str('cloudvault'),
     MAX_UPLOAD_BYTES: int(104857600, { min: 1 }),
     DEFAULT_QUOTA_BYTES: int(5368709120),
     QUOTA_WARNING_PERCENT: int(80, { min: 1 }),
@@ -63,6 +73,14 @@ const schema = z
     MAIL_FROM: str('CloudVault <no-reply@cloudvault.local>'),
   })
   .superRefine((v, ctx) => {
+    if (v.STORAGE_DRIVER === 'cloudinary') {
+      const c = cloudinaryCredentials(v);
+      for (const [field, value] of [['CLOUDINARY_CLOUD_NAME', c.cloudName], ['CLOUDINARY_API_KEY', c.apiKey], ['CLOUDINARY_API_SECRET', c.apiSecret]]) {
+        if (isPlaceholder(value)) {
+          ctx.addIssue({ code: 'custom', path: [field], message: 'required when STORAGE_DRIVER=cloudinary (or set CLOUDINARY_URL)' });
+        }
+      }
+    }
     if (v.NODE_ENV !== 'production') return;
     if (v.JWT_ACCESS_SECRET.startsWith('change-me') || v.JWT_ACCESS_SECRET.length < 32) {
       ctx.addIssue({ code: 'custom', path: ['JWT_ACCESS_SECRET'], message: 'production requires a random secret of 32+ characters' });
@@ -89,6 +107,7 @@ export const env = Object.freeze({
   clientUrl: e.CLIENT_URL.replace(/\/$/, ''),
   trustProxy: e.TRUST_PROXY,
   databaseUrl: e.DATABASE_URL,
+  redisUrl: e.REDIS_URL ?? '',
 
   auth: Object.freeze({
     accessSecret: e.JWT_ACCESS_SECRET,
@@ -105,6 +124,7 @@ export const env = Object.freeze({
     driver: e.STORAGE_DRIVER,
     root: storageRoot,
     tmpDir: path.join(storageRoot, 'tmp'), // multer staging area (driver independent)
+    cloudinary: Object.freeze({ ...cloudinaryCredentials(e), folder: e.CLOUDINARY_FOLDER }),
     maxUploadBytes: e.MAX_UPLOAD_BYTES,
     defaultQuotaBytes: BigInt(e.DEFAULT_QUOTA_BYTES),
     quotaWarningPercent: e.QUOTA_WARNING_PERCENT,

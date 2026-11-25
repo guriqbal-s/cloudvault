@@ -1,8 +1,14 @@
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
 import { env } from '../config/env.js';
+import { redis } from '../config/redis.js';
 import ApiError from '../utils/ApiError.js';
 
 const handler = (_req, _res, next) => next(ApiError.tooMany());
+
+// With Redis, counters are shared by every API instance; otherwise they live in this process.
+const store = (name) =>
+  redis ? new RedisStore({ prefix: `cv:rl:${name}:`, sendCommand: (command, ...args) => redis.call(command, ...args) }) : undefined;
 
 /** Broad limiter applied to every /api route. */
 export const apiLimiter = rateLimit({
@@ -11,6 +17,7 @@ export const apiLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler,
+  store: store('api'),
 });
 
 /**
@@ -24,6 +31,7 @@ export const loginLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   handler,
+  store: store('login'),
 });
 
 /** Strict limiter for register, forgot/reset password and verification endpoints (all requests count). */
@@ -33,4 +41,5 @@ export const authLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler,
+  store: store('auth'),
 });

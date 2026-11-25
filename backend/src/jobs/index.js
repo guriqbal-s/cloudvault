@@ -9,7 +9,9 @@ import logger from '../utils/logger.js';
 import activityService from '../services/activity.service.js';
 import notificationService from '../services/notification.service.js';
 import { storage } from '../services/storage/index.js';
+import { redis } from '../config/redis.js';
 import { createJobs } from './jobs.logic.js';
+import { withClusterLock } from './clusterLock.js';
 
 export function startJobs() {
   const jobs = createJobs({
@@ -27,7 +29,8 @@ export function startJobs() {
 
   const tasks = schedule.map(([name, expression, fn]) => {
     if (!cron.validate(expression)) throw new Error(`Invalid cron expression for ${name}: "${expression}"`);
-    return cron.schedule(expression, jobs.guarded(name, fn));
+    // guarded: no overlap within this instance; cluster lock: only one instance runs each tick
+    return cron.schedule(expression, jobs.guarded(name, withClusterLock(redis, name, fn, { logger })));
   });
   logger.info(`Scheduled ${tasks.length} background jobs`);
   return () => tasks.forEach((t) => t.stop());

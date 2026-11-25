@@ -10,6 +10,8 @@ import app from './app.js';
 import logger from './utils/logger.js';
 import { attachSocketServer } from './sockets/index.js';
 import { startJobs } from './jobs/index.js';
+import { assertRedisReachable, closeRedis } from './config/redis.js';
+import { storage } from './services/storage/index.js';
 
 export const httpServer = http.createServer(app);
 const io = attachSocketServer(httpServer);
@@ -31,13 +33,19 @@ async function start() {
     );
   });
   await prepareLocalStorage();
+  await assertRedisReachable();
+  // Warm the storage health cache so the first load-balancer probe answers quickly.
+  if (!(await storage.healthCheck())) logger.warn(`Storage (${env.storage.driver}) is not reachable yet`);
 
   await new Promise((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(env.port, () => resolve());
   });
   stopJobs = startJobs();
-  logger.info(`CloudVault API listening on http://localhost:${env.port} (${env.nodeEnv}, storage: ${env.storage.driver})`);
+  logger.info(
+    `CloudVault API listening on http://localhost:${env.port} (${env.nodeEnv}, storage: ${env.storage.driver}, ` +
+      `${env.redisUrl ? 'multi-instance via Redis' : 'single instance'})`
+  );
 }
 
 let shuttingDown = false;
@@ -56,6 +64,7 @@ async function shutdown(signal) {
     await new Promise((resolve) => httpServer.close(() => resolve()));
     httpServer.closeIdleConnections?.();
     await prisma.$disconnect();
+    await closeRedis();
     process.exit(0);
   } catch (err) {
     logger.error('Error during shutdown', err);

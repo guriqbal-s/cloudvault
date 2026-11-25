@@ -1,0 +1,14 @@
+**/node_modules
+.git
+.vscode
+.idea
+.local-db
+storage
+frontend/dist
+**/*.log
+# Secrets are passed at runtime with env_file, never copied into an image
+.env
+.env.*
+frontend/.env
+frontend/.env.*
+# prisma/rds-ca.pem is intentionally NOT ignored: the api image needs it for RDS TLS

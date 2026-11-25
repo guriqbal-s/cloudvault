@@ -1,13 +1,16 @@
 // Storage factory. Application code imports { storage } from here and never a concrete
-// provider, so moving to S3 means adding S3StorageProvider and setting STORAGE_DRIVER=s3.
+// provider. STORAGE_DRIVER picks the backend: local disk or Cloudinary.
 
 import { env } from '../../config/env.js';
 import LocalStorageProvider from './LocalStorageProvider.js';
+import CloudinaryStorageProvider from './CloudinaryStorageProvider.js';
 
 function createStorage() {
   switch (env.storage.driver) {
     case 'local':
       return new LocalStorageProvider({ root: env.storage.root });
+    case 'cloudinary':
+      return new CloudinaryStorageProvider(env.storage.cloudinary);
     case 's3':
       throw new Error(
         'STORAGE_DRIVER=s3 is not implemented yet. Add services/storage/S3StorageProvider.js ' +

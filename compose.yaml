@@ -1,6 +1,83 @@
+# CloudVault with Docker.
+#
+#   npm run docker:up                migrate once, then redis + N api replicas + nginx (web)
+#                                    -> http://localhost:8080 (WEB_PORT in .env)
+#   API_REPLICAS=4 npm run docker:up scale the API horizontally (default 2)
+#   npm run dev:local                local development: starts only the "mysql" service below
+#
+# Compose reads .env for ${...} values; the api containers also receive all of .env.
+# AWS RDS (DATABASE_URL) and Cloudinary hold all durable data, so every api replica is stateless.
+
+x-api: &api
+  build:
+    context: .
+    target: api
+  image: cloudvault-api
+  env_file: .env
+  environment: &api-env
+    # Container-specific overrides; everything else comes from .env
+    NODE_ENV: ${DOCKER_NODE_ENV:-development}
+    PORT: '4000'
+    # Public address of the app; set PUBLIC_URL to your https:// domain in production
+    CLIENT_URL: ${PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}
+    TRUST_PROXY: 'true'
+    STORAGE_ROOT: /app/storage
+    # Shared state across replicas: rate limits, Socket.IO events, job locks
+    REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
+
 services:
+  # Applies pending Prisma migrations once, before any api replica starts.
+  migrate:
+    <<: *api
+    command: ['npx', 'prisma', 'migrate', 'deploy', '--schema', 'prisma/schema.prisma']
+    restart: 'no'
+
+  api:
+    <<: *api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      resources:
+        limits:
+          memory: 512m
+    # Anonymous volume = private disk per replica for short-lived upload staging files.
+    # (STORAGE_DRIVER=local keeps file contents per container and cannot be scaled past one replica.)
+    volumes:
+      - /app/storage
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory', '256mb', '--maxmemory-policy', 'volatile-lru']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      target: web
+    image: cloudvault-web
+    ports:
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Local MySQL for development only. Not started by "docker compose up" (profile), but
+  # "npm run dev:local" / "npm run db:local" start it by name.
   mysql:
     image: mysql:8.4
+    profiles: ['local-db']
     environment:
       MYSQL_DATABASE: cloudvault
       MYSQL_ROOT_PASSWORD: cloudvault-local-root

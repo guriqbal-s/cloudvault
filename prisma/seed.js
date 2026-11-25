@@ -5,8 +5,9 @@
 //
 // The demo run WIPES existing application data (users, files, shares, logs...) and the
 // demo file objects on disk, then rebuilds them. It refuses to run when NODE_ENV=production.
-// File contents are written straight to STORAGE_ROOT using the same opaque keys the
-// backend storage provider will use, so seeded files can really be downloaded/previewed.
+// File contents are written straight to STORAGE_ROOT (or uploaded to Cloudinary when
+// STORAGE_DRIVER=cloudinary) using the same opaque keys the backend storage provider uses,
+// so seeded files can really be downloaded/previewed.
 
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
@@ -34,6 +35,20 @@ dotenv.config({ path: path.join(repoRoot, '.env') });
 
 const CORE_ONLY = process.argv.includes('--core');
 const STORAGE_ROOT = path.resolve(repoRoot, process.env.STORAGE_ROOT || './storage');
+// With STORAGE_DRIVER=cloudinary, demo file contents are uploaded to Cloudinary instead.
+// --core writes no files, so it never needs Cloudinary credentials.
+const cloudStorage = CORE_ONLY ? null : await createCloudStorage();
+
+async function createCloudStorage() {
+  if (process.env.STORAGE_DRIVER !== 'cloudinary') return null;
+  const { cloudinaryCredentials, isPlaceholder } = await import('../backend/src/services/storage/cloudinaryConfig.js');
+  const { default: CloudinaryStorageProvider } = await import('../backend/src/services/storage/CloudinaryStorageProvider.js');
+  const creds = cloudinaryCredentials(process.env);
+  if ([creds.cloudName, creds.apiKey, creds.apiSecret].some(isPlaceholder)) {
+    throw new Error('STORAGE_DRIVER=cloudinary but the Cloudinary credentials in .env are not filled in.');
+  }
+  return new CloudinaryStorageProvider({ ...creds, folder: process.env.CLOUDINARY_FOLDER || 'cloudvault' });
+}
 const PASSWORD = process.env.SEED_DEFAULT_PASSWORD || 'CloudVault#2026';
 const DEFAULT_QUOTA = BigInt(process.env.DEFAULT_QUOTA_BYTES || 5368709120);
 const WARNING_PERCENT = Number(process.env.QUOTA_WARNING_PERCENT || 80);
@@ -124,6 +139,12 @@ async function wipeDemoData() {
   await prisma.userRole.deleteMany();
   await prisma.user.deleteMany();
 
+  if (cloudStorage) {
+    console.log('  Deleting demo objects from Cloudinary...');
+    await cloudStorage.deletePrefix('versions/users/');
+    await cloudStorage.deletePrefix('uploads/avatars/');
+    return;
+  }
   await fs.rm(path.join(STORAGE_ROOT, 'versions', 'users'), { recursive: true, force: true });
   for (const dir of ['uploads', 'versions', 'tmp']) {
     await fs.mkdir(path.join(STORAGE_ROOT, dir), { recursive: true });
@@ -131,6 +152,10 @@ async function wipeDemoData() {
 }
 
 async function writeObject(key, buf) {
+  if (cloudStorage) {
+    await cloudStorage.put(key, buf);
+    return;
+  }
   const full = path.join(STORAGE_ROOT, key);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, buf);
@@ -418,7 +443,9 @@ async function seedDemo(roleIds) {
     { buf: pdf('Design Brief', 1, 200), ageDays: 16, comment: 'Initial brief' },
     { buf: pdf('Design Brief', 2, 230), ageDays: 6, comment: 'Updated scope' },
   ], { accessedDaysAgo: 1 });
-  await mkFile(bob, null, 'Data Export.csv', [{ buf: makeCsv({ targetBytes: 20 * MB, rng, startYear: 2025 }), ageDays: 14 }]);
+  // Two ~9.9 MB files rather than one 20 MB file: the Cloudinary Free plan caps raw files at 10 MB.
+  await mkFile(bob, null, 'Data Export.csv', [{ buf: makeCsv({ targetBytes: 9.9 * MB, rng, startYear: 2025 }), ageDays: 14 }]);
+  await mkFile(bob, null, 'Data Export (part 2).csv', [{ buf: makeCsv({ targetBytes: 9.9 * MB, rng, startYear: 2025 }), ageDays: 14 }]);
   const brandGuide = await mkFile(bob, sharedAssets, 'Brand Guidelines.pdf', [{ buf: pdf('Brand Guidelines', 1, 150), ageDays: 13 }]);
   addNotification(bob, 'UPLOAD_FAILED', 'Upload failed', '"promo-video.mp4" exceeds your storage quota.', daysAgo(11), { read: true });
   addLog(bob, 'PASSWORD_CHANGE', { at: daysAgo(8), description: `${bob.name} changed their password` });

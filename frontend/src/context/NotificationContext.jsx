@@ -44,6 +44,9 @@ export function NotificationProvider({ children }) {
     const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, {
       path: '/socket.io',
       auth: (cb) => cb({ token: getAccessToken() }),
+      // WebSocket first: a single long-lived connection works behind a load balancer across
+      // several API instances without sticky sessions. Long-polling stays as a fallback.
+      transports: ['websocket', 'polling'],
       reconnectionDelayMax: 15_000,
     });
 
