@@ -1,6 +1,6 @@
 # Database schema
 
-Defined in `prisma/schema.prisma`; extra DDL in `prisma/extras.sql` is appended to the init migration by `npm run db:setup`.
+Prisma models live in `prisma/schema.prisma`. The initial MySQL migration defines additional database constraints.
 
 | Model | Purpose |
 |---|---|
@@ -17,11 +17,11 @@ Defined in `prisma/schema.prisma`; extra DDL in `prisma/extras.sql` is appended 
 | ActivityLog | audit trail with description, resource reference, IP |
 | StorageUsage | daily per-user snapshots used by charts |
 
-## Constraints and indexes (extras.sql)
-- `pg_trgm` GIN indexes for fuzzy name search.
-- Partial unique indexes on live sibling names (case-insensitive), so trashed items do not block name reuse.
-- CHECK constraints (non-negative sizes and quotas, positive version numbers).
-- `text_pattern_ops` index on `Folder.path` for subtree queries (move, cascade delete).
+## Constraints and indexes
+
+- Unique indexes enforce case-insensitive sibling names for live files and folders. Trashed items can reuse names.
+- CHECK constraints enforce non-negative sizes and quotas, positive version numbers, valid share targets, and no self-sharing.
+- The prefix index on folder paths supports subtree lookup. Name search uses MySQL case-insensitive substring matching.
 
 ## Demo seed
 `npm run db:seed`: 5 roles, 27 permissions, accounts `superadmin|admin|manager|alice|bob|viewer|suspended|pending@cloudvault.dev`, password `CloudVault#2026`, sample folders, files, shares and activity.

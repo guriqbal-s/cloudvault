@@ -30,5 +30,8 @@ storage/tmp/*
 !storage/versions/.gitkeep
 !storage/tmp/.gitkeep
 
-# Bundled local PostgreSQL data (npm run setup:local / dev:local)
+# Data from previous bundled database installs
 .local-db/
+
+# Local AWS RDS CA certificate
+/prisma/rds-ca.pem

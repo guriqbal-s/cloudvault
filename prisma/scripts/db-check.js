@@ -1,143 +1,105 @@
-// Connection doctor for the database in DATABASE_URL (local PostgreSQL or AWS RDS).
-//
-//   npm run db:check            -> parse the URL, connect, report server/SSL/extension status
-//   npm run db:check -- --create -> also create the target database if it does not exist yet
-//
-// It explains the usual RDS problems (security group, public access, SSL, password encoding)
-// instead of printing a bare Prisma error code.
-
+// Check the MySQL connection in DATABASE_URL and optionally create the target database.
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..', '..');
-dotenv.config({ path: path.join(repoRoot, '.env') });
-
-const CREATE = process.argv.includes('--create');
-const ok = (m) => console.log(`  ✔ ${m}`);
-const warn = (m) => console.log(`  ! ${m}`);
-const fail = (m) => { console.error(`  ✖ ${m}`); process.exit(1); };
+dotenv.config({ path: fileURLToPath(new URL('../../.env', import.meta.url)) });
 
 const raw = process.env.DATABASE_URL;
-if (!raw) fail('DATABASE_URL is not set. Copy .env.example to .env and fill it in.');
+const create = process.argv.includes('--create');
 
-let url;
-try {
-  url = new URL(raw);
-} catch {
-  fail('DATABASE_URL is not a valid URL. If your password contains @ : / ? # % or spaces, URL-encode it\n'
-    + '    (run: node -e "console.log(encodeURIComponent(process.argv[1]))" "your-password").');
-}
-if (!/^postgres(ql)?:$/.test(url.protocol)) fail(`DATABASE_URL must start with postgresql:// (got ${url.protocol}//).`);
-
-const dbName = decodeURIComponent(url.pathname.replace(/^\//, '')) || 'postgres';
-const isRds = /\.rds\.amazonaws\.com$/i.test(url.hostname);
-const sslmode = url.searchParams.get('sslmode');
-
-console.log('\nCloudVault database check');
-console.log(`  host:     ${url.hostname}:${url.port || 5432}${isRds ? '  (AWS RDS)' : ''}`);
-console.log(`  database: ${dbName}`);
-console.log(`  user:     ${decodeURIComponent(url.username)}`);
-console.log(`  sslmode:  ${sslmode ?? '(not set)'}\n`);
-
-if (isRds && !sslmode) {
-  warn('RDS endpoints normally require SSL. Add  ?sslmode=require  (or &sslmode=require) to DATABASE_URL.');
-}
-if (isRds && !url.searchParams.get('connect_timeout')) {
-  warn('Tip: add &connect_timeout=15 so an unreachable RDS host fails fast instead of hanging.');
+function fail(message) {
+  throw new Error(message);
 }
 
-const withDb = (name) => {
-  const u = new URL(url.href);
-  u.pathname = `/${encodeURIComponent(name)}`;
-  return u.href;
+async function usingDatabase(url, callback) {
+  const prisma = new PrismaClient({ datasourceUrl: url.href });
+  try {
+    await prisma.$connect();
+    return await callback(prisma);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+function errorCode(error) {
+  return error.errorCode ?? error.code;
+}
+
+async function main() {
+  if (!raw) fail('Set DATABASE_URL in the root .env file or in the process environment.');
+  if (/YOUR_RDS_ENDPOINT|YOUR_DB_USER|YOUR_DB_PASSWORD/.test(raw)) {
+    fail('Fill in the RDS endpoint, username and password in the root .env file.');
+  }
+
+  let url;
+  let dbName;
+  try {
+    url = new URL(raw);
+    dbName = decodeURIComponent(url.pathname.slice(1));
+  } catch {
+    fail('DATABASE_URL is invalid. Percent-encode special characters in the username and password.');
+  }
+  if (url.protocol !== 'mysql:' || !url.hostname || !url.username || !dbName || dbName.includes('/')) {
+    fail('DATABASE_URL must use mysql://USER:PASSWORD@HOST:PORT/DATABASE.');
+  }
+
+  const isRds = /\.rds\.amazonaws\.com(?:\.cn)?$/i.test(url.hostname);
+  if (isRds && (!url.searchParams.has('sslcert') || url.searchParams.get('sslaccept') !== 'strict')) {
+    fail('For RDS, set sslcert and sslaccept=strict in DATABASE_URL. See docs/aws-rds-setup.md.');
+  }
+  console.log(`\nChecking ${url.hostname}:${url.port || 3306}/${dbName}${isRds ? ' (AWS RDS)' : ''}`);
+
+  try {
+    await checkDatabase(url, isRds);
+  } catch (error) {
+    if (errorCode(error) !== 'P1003' || !create) throw error;
+    const maintenance = new URL(url);
+    maintenance.pathname = '/information_schema';
+    const identifier = '\x60' + dbName.replaceAll('\x60', '\x60\x60') + '\x60';
+    await usingDatabase(maintenance, (prisma) => prisma.$executeRawUnsafe(
+      `CREATE DATABASE IF NOT EXISTS ${identifier} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_ci`,
+    ));
+    console.log(`  Created database ${dbName}.`);
+    await checkDatabase(url, isRds);
+  }
+}
+
+async function checkDatabase(url, isRds) {
+  await usingDatabase(url, async (prisma) => {
+    const [{ version }] = await prisma.$queryRaw`SELECT VERSION() AS version`;
+    console.log(`  Connected to MySQL ${version}.`);
+
+    if (isRds) {
+      const [tls] = await prisma.$queryRaw`SHOW SESSION STATUS LIKE 'Ssl_cipher'`;
+      if (!tls?.Value) fail('The RDS connection is missing TLS encryption.');
+      console.log(`  TLS cipher ${tls.Value}.`);
+    }
+
+    const [table] = await prisma.$queryRaw`
+      SELECT 1 FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = '_prisma_migrations'`;
+    if (table) {
+      const [{ n }] = await prisma.$queryRaw`
+        SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
+      console.log(`  Applied migrations: ${n}.`);
+    } else {
+      console.log('  No migrations applied. Run npm run db:setup:prod to initialize this database.');
+    }
+  });
+}
+
+const hints = {
+  P1000: 'Authentication failed. Check the RDS username and percent-encoded password.',
+  P1001: 'MySQL is unreachable. Check the host, port, network access, and RDS security group.',
+  P1002: 'MySQL timed out. Check the host, port, network access, and RDS security group.',
+  P1003: 'The database does not exist. Run npm run db:check -- --create to create it.',
+  P1010: 'The MySQL user does not have access to the requested database.',
+  P1011: 'TLS connection failed. Check the AWS RDS CA certificate and endpoint.',
 };
 
-function explain(err) {
-  const msg = String(err?.message ?? err);
-  const code = err?.errorCode ?? '';
-  if (code === 'P1001' || /Can't reach database server|timed out|ETIMEDOUT|ECONNREFUSED/i.test(msg)) {
-    return [
-      'Cannot reach the database server.',
-      isRds
-        ? 'For RDS check: (1) the instance status is "Available"; (2) "Publicly accessible" is Yes if you connect from your own PC;\n'
-          + '    (3) the instance\'s security group has an inbound rule: PostgreSQL, TCP 5432, source = My IP;\n'
-          + '    (4) the endpoint and port in DATABASE_URL match the RDS console; (5) your network does not block outbound port 5432.'
-        : 'Is PostgreSQL running, and are the host/port right?',
-    ].join('\n    ');
-  }
-  if (code === 'P1000' || /authentication failed|password authentication/i.test(msg)) {
-    return 'Authentication failed: wrong username or password. For RDS this is the master username/password you chose when creating the instance.\n'
-      + '    Special characters in the password must be URL-encoded in DATABASE_URL.';
-  }
-  if (code === 'P1003' || /does not exist/i.test(msg)) {
-    return `Database "${dbName}" does not exist on this server. Run:  npm run db:check -- --create`;
-  }
-  if (/no pg_hba.conf entry|SSL|TLS|certificate/i.test(msg)) {
-    return 'SSL problem. For RDS use ?sslmode=require in DATABASE_URL.';
-  }
-  return msg;
-}
-
-async function connect(href) {
-  const client = new PrismaClient({ datasources: { db: { url: href } }, log: [] });
-  await client.$connect();
-  return client;
-}
-
-let prisma;
-try {
-  prisma = await connect(url.href);
-} catch (err) {
-  const missingDb = err?.errorCode === 'P1003' || /does not exist/i.test(String(err?.message));
-  if (!(missingDb && CREATE)) fail(explain(err));
-
-  // Connect to the always-present "postgres" maintenance database and create ours.
-  let admin;
-  try {
-    admin = await connect(withDb('postgres'));
-    await admin.$executeRawUnsafe(`CREATE DATABASE "${dbName.replace(/"/g, '""')}"`);
-    ok(`Created database "${dbName}"`);
-  } catch (e) {
-    fail(`Could not create database "${dbName}": ${explain(e)}`);
-  } finally {
-    await admin?.$disconnect();
-  }
-  try { prisma = await connect(url.href); } catch (e) { fail(explain(e)); }
-}
-
-try {
-  const [{ version }] = await prisma.$queryRawUnsafe('SELECT version() AS version');
-  ok(`Connected: ${version.split(',')[0]}`);
-
-  const major = Number((await prisma.$queryRawUnsafe('SHOW server_version_num'))[0].server_version_num) / 10000;
-  if (major < 14) warn(`PostgreSQL ${Math.floor(major)} detected; CloudVault is tested on 14+.`);
-
-  try {
-    const [{ ssl }] = await prisma.$queryRawUnsafe('SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()');
-    if (ssl) ok('Connection is encrypted (SSL)');
-    else if (isRds) warn('Connection is NOT encrypted. Add sslmode=require to DATABASE_URL.');
-    else ok('Connection is not encrypted (fine for a local server)');
-  } catch { /* pg_stat_ssl not visible: ignore */ }
-
-  const ext = await prisma.$queryRawUnsafe("SELECT 1 FROM pg_available_extensions WHERE name = 'pg_trgm'");
-  if (ext.length) ok('pg_trgm extension is available (needed for fast search)');
-  else warn('pg_trgm extension is not available on this server; the initial migration will fail.');
-
-  const tables = await prisma.$queryRawUnsafe(
-    "SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_prisma_migrations'",
-  );
-  if (tables[0].n) {
-    const [{ n }] = await prisma.$queryRawUnsafe('SELECT count(*)::int AS n FROM "_prisma_migrations" WHERE finished_at IS NOT NULL');
-    ok(`Schema present (${n} migration${n === 1 ? '' : 's'} applied)`);
-  } else {
-    warn('No tables yet. Next step:  npm run db:setup');
-  }
-  console.log('\nDatabase looks good.\n');
-} catch (err) {
-  fail(explain(err));
-} finally {
-  await prisma.$disconnect();
-}
+main().catch((error) => {
+  const code = errorCode(error);
+  console.error(hints[code] ?? (code ? `Database check failed (${code}).` : error.message));
+  process.exitCode = 1;
+});

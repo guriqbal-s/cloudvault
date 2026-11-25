@@ -1,5 +1,5 @@
 // Authentication business logic. Every dependency is injected, so the whole module is
-// unit-tested without PostgreSQL, bcrypt or SMTP. services/auth/auth.service.js wires the real ones.
+// unit-tested without a database, bcrypt or SMTP. services/auth/auth.service.js wires the real ones.
 //
 // Security properties (each is covered by a test):
 //  - Passwords are bcrypt-hashed; login does the same work for unknown emails (no timing oracle)

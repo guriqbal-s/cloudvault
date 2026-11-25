@@ -13,8 +13,8 @@
   ],
   "scripts": {
     "setup:local": "node scripts/setup-local.js",
-    "dev:local": "concurrently --kill-others-on-fail -n db,api,web -c green,blue,magenta \"npm run db:local\" \"node scripts/wait-for-db.js && npm run dev -w backend\" \"npm run dev -w frontend\"",
-    "db:local": "node scripts/local-db.js",
+    "dev:local": "docker compose up -d --wait mysql && npm run dev",
+    "db:local": "docker compose up mysql",
     "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "dev:api": "npm run dev -w backend",
     "dev:web": "npm run dev -w frontend",
@@ -34,8 +34,7 @@
     "postinstall": "prisma generate --schema prisma/schema.prisma"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0",
-    "embedded-postgres": "17.5.0-beta.15"
+    "concurrently": "^9.1.0"
   },
   "allowScripts": {
     "@prisma/client": true,

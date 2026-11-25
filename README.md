@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# Cloudvault
-=======
 # CloudVault
 A full-stack cloud file storage app in the style of Google Drive or Dropbox. Upload, organise, version,
 share and search files from a responsive web app that works on desktop and phone.
@@ -12,17 +9,16 @@ share and search files from a responsive web app that works on desktop and phone
 - **Accounts:** sign up, email verification, password reset, sessions, profile, light/dark theme
 - **Admin:** user management, roles and permissions (RBAC), storage quotas, activity log, analytics
 
-**Stack:** React 18 + Vite + Tailwind (frontend) · Node.js + Express + Socket.IO (API) · PostgreSQL + Prisma (database)
+**Stack:** React 18 + Vite + Tailwind (frontend) · Node.js + Express + Socket.IO (API) · MySQL + Prisma (database)
 
 ---
 
 ## Quick start (run it on your computer)
 
-You only need **Node.js 20.11 or newer** ([download](https://nodejs.org)). You do **not** need to install
-PostgreSQL: the project ships a bundled PostgreSQL that runs from `node_modules`.
+Install **Node.js 20.11 or newer** ([download](https://nodejs.org)) and Docker with Compose for local MySQL.
 
 ```bash
-# 1. Install everything (frontend, backend, and the bundled database)
+# 1. Install frontend and backend dependencies
 npm install
 
 # 2. One-time setup: creates .env, the database, the tables and demo data
@@ -38,8 +34,7 @@ Open **http://localhost:5173** and sign in:
 |---|---|
 | `alice@cloudvault.dev` | `CloudVault#2026` |
 
-Press **Ctrl+C** in the terminal to stop everything. Your data is kept in the `.local-db/` folder and is
-still there the next time you run `npm run dev:local`. You only run `setup:local` once.
+Press **Ctrl+C** to stop the API and web app. Run `docker compose stop mysql` to stop MySQL. The Compose volume retains the local database.
 
 ---
 
@@ -54,7 +49,7 @@ still there the next time you run `npm run dev:local`. You only run `setup:local
                    │
                    │  Prisma, using DATABASE_URL from .env
                    ▼
-              localhost:5433          Bundled PostgreSQL 17      (data in .local-db/)
+              localhost:3307          MySQL 8.4 in Docker (persistent volume)
               ─ or ─ AWS RDS          (see "Using AWS RDS" below)
 
   Uploaded file contents ──► storage/  (on disk, next to the code)
@@ -106,9 +101,9 @@ Run these from the project root.
 | Command | What it does |
 |---|---|
 | `npm run setup:local` | One-time local setup (creates `.env`, database, tables, demo data). Safe to re-run: it re-seeds the demo data |
-| `npm run dev:local` | Start the bundled database, API and web app together |
+| `npm run dev:local` | Start local MySQL, the API and the web app |
 | `npm run dev` | Start API + web app only (use this with AWS RDS, or if the database is already running) |
-| `npm run db:local` | Start only the bundled database (keeps running until Ctrl+C) |
+| `npm run db:local` | Start only local MySQL (keeps running until Ctrl+C) |
 | `npm run db:check` | Test the connection in `DATABASE_URL` and explain any problem |
 | `npm run db:setup` | Create the database if needed, apply migrations, seed demo data |
 | `npm run db:seed` | Reset the demo data (**wipes** all app data first) |
@@ -128,8 +123,8 @@ Run these from the project root.
 | `npm run db:reset` | Drop everything, re-apply migrations, re-seed |
 | `npm run db:generate` | Regenerate the Prisma client (runs automatically after `npm install`) |
 
-`db:setup`, `db:local`, `db:check` and `db:studio` work on whatever database `DATABASE_URL` points to.
-With the bundled database, start it first (`npm run db:local` in a second terminal) before running
+`db:setup`, `db:check` and `db:studio` use the database in `DATABASE_URL`.
+With local MySQL, start it first (`npm run db:local` in a second terminal) before running
 `db:seed`, `db:studio`, `db:deploy` or `db:migrate`.
 
 </details>
@@ -138,21 +133,7 @@ With the bundled database, start it first (`npm run db:local` in a second termin
 
 ## Using AWS RDS instead of the local database
 
-The app works the same on RDS; only `DATABASE_URL` changes. Step by step (creating the instance,
-opening the security group, writing the connection string): **[docs/aws-rds-setup.md](docs/aws-rds-setup.md)**.
-
-In short:
-
-1. In `.env`, comment out the local `DATABASE_URL` line and add your RDS one:
-   ```dotenv
-   # DATABASE_URL="postgresql://postgres:postgres@localhost:5433/cloudvault?schema=public"
-   DATABASE_URL="postgresql://postgres:<PASSWORD>@<RDS-ENDPOINT>:5432/cloudvault?schema=public&sslmode=require&connect_timeout=15&connection_limit=10"
-   ```
-2. `npm run db:check` to test the connection.
-3. `npm run db:setup` to create the tables and demo data on RDS.
-4. `npm run dev` (not `dev:local`, since there is no local database to start).
-
-To switch back, swap which line is commented out. Each database keeps its own data.
+For an RDS for MySQL 8.4 instance, fill in the RDS connection URL in the root `.env` and install its CA certificate. See [Connecting to AWS RDS](docs/aws-rds-setup.md) for the connection settings and migration steps.
 
 ---
 
@@ -163,7 +144,7 @@ setting). The ones you are most likely to change:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` | bundled local DB | Where the data lives (local or RDS) |
+| `DATABASE_URL` | RDS template | MySQL connection URL (local or RDS) |
 | `JWT_ACCESS_SECRET` | random (generated) | Signs sign-in tokens. Keep it secret |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` | Set `false` to let new sign-ups log in without verifying |
 | `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` | empty | Fill in to send real emails; empty prints them to the terminal |
@@ -171,7 +152,6 @@ setting). The ones you are most likely to change:
 | `DEFAULT_QUOTA_BYTES` | 5 GB | Storage per new user |
 | `ALLOWED_EXTENSIONS` | pdf, docx, png, … | Which file types can be uploaded |
 | `STORAGE_ROOT` | `./storage` | Where uploaded file contents are written |
-| `LOCAL_DB_PORT` | `5433` | Port of the bundled database. Only needed if 5433 is taken: set it as a shell environment variable (not in `.env`) for both `setup:local` and `dev:local` |
 
 Change a setting, then restart `npm run dev:local`.
 
@@ -185,7 +165,7 @@ Change a setting, then restart `npm run dev:local`.
 | `Port 5173 / 4000 is already in use` | Another copy is still running. Close that terminal, or end the stray `node` process in Task Manager |
 | `could not start the local database` | Close other copies of `dev:local`. If it persists, delete the `.local-db` folder (**erases local data**) and run `npm run setup:local` again |
 | Sign-in fails with the demo password | Re-run `npm run setup:local` to reset the demo data. In `.env` the password must be quoted: `SEED_DEFAULT_PASSWORD="CloudVault#2026"` (unquoted, `#` starts a comment) |
-| `Cannot connect to the database` when using `npm run dev` | `npm run dev` does not start the bundled database. Use `npm run dev:local`, or start `npm run db:local` in another terminal |
+| `Cannot connect to the database` when using `npm run dev` | `npm run dev` does not start local MySQL. Use `npm run dev:local`, or start `npm run db:local` in another terminal |
 | RDS connection problems | `npm run db:check` explains the cause; see the troubleshooting table in [docs/aws-rds-setup.md](docs/aws-rds-setup.md) |
 | Want to start from scratch | Stop everything, delete `.local-db/` and `storage/versions/`, run `npm run setup:local` |
 
@@ -213,11 +193,10 @@ cloudvault/
       context/        auth, theme, notifications, toasts
   prisma/
     schema.prisma     database schema
-    migrations/       SQL migrations (generated by db:setup; commit this folder)
-    extras.sql        search indexes and constraints Prisma can't express
+    migrations/       Versioned MySQL migrations
     seed.js           demo data
     scripts/          db-setup.js, db-check.js
-  scripts/            setup-local.js, local-db.js, wait-for-db.js (bundled database)
+  scripts/            setup-local.js (local MySQL bootstrap)
   storage/            uploaded file contents (git-ignored)
   docs/               detailed documentation
   .env.example        every setting, documented
@@ -249,4 +228,3 @@ cloudvault/
 - **Names are unique per folder, case-insensitively**, among items that aren't in the trash.
 - **Changing the schema:** edit `prisma/schema.prisma`, run `npm run db:migrate` with the database
   running (Prisma asks for a migration name), and commit the new folder in `prisma/migrations/`.
->>>>>>> 650cc01 (Initial commit)

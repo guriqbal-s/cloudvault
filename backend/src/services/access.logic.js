@@ -1,5 +1,5 @@
 // Resource-level authorisation ("layer 2"). Pure logic plus an injectable database handle,
-// so it can be unit-tested without PostgreSQL. services/access.service.js wires in Prisma.
+// so it can be unit-tested without a database. services/access.service.js wires in Prisma.
 //
 // Two layers must BOTH allow an action:
 //   1. Global RBAC   - does the actor's role include the permission key (e.g. "file:update")?

@@ -1,4 +1,4 @@
-// The Prisma repo needs PostgreSQL, which is not available here. These tests check what can be
+// The Prisma repo needs MySQL, which is not available here. These tests check what can be
 // checked without it: that it exposes exactly the interface the logic (and the in-memory fake)
 // use, and that its JavaScript-side behaviour (error mapping, filtering, query composition) is
 // right against a recording stub client. The SQL itself is NOT executed by any test.
@@ -50,10 +50,10 @@ test('unique-constraint violations become NAME_TAKEN', async () => {
   await assert.rejects(createDriveRepo(c2).createFolder({ name: 'X' }), (e) => e === other);
 });
 
-test('reserveQuota maps the conditional UPDATE result', async () => {
-  const ok = createDriveRepo(stub({ queryRaw: [{ used: 15n, quota: 100n }] }).client);
+test('reserveQuota checks capacity while holding the owner row lock', async () => {
+  const ok = createDriveRepo(stub({ queryRaw: [{ used: 10n, quota: 100n }] }).client);
   assert.deepEqual(await ok.reserveQuota(uuid(1), 5n), { ok: true, used: 15n, quota: 100n });
-  const full = createDriveRepo(stub({ queryRaw: [] }).client);
+  const full = createDriveRepo(stub({ queryRaw: [{ used: 99n, quota: 100n }] }).client);
   assert.deepEqual(await full.reserveQuota(uuid(1), 5n), { ok: false });
 });
 
@@ -124,7 +124,7 @@ test('search composes visibility from ownership, direct shares and shared-folder
   await createDriveRepo(client).search({ actorId: 'me', q: 'bud', extensions: ['pdf'], minSize: 5n, includeFolders: true, skip: 0, take: 10 });
   const where = calls.find((c) => c[0] === 'file' && c[1] === 'findMany')[2].where;
   assert.equal(where.deletedAt, null);
-  assert.deepEqual(where.name, { contains: 'bud', mode: 'insensitive' });
+  assert.deepEqual(where.name, { contains: 'bud' });
   assert.deepEqual(where.extension, { in: ['pdf'] });
   assert.deepEqual(where.size, { gte: 5n });
   assert.deepEqual(where.OR, [

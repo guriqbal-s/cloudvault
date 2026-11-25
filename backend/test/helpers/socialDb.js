@@ -1,5 +1,5 @@
 // In-memory Prisma stand-in for the social/admin modules. Supports: where (equality, null, Date,
-// in/notIn/not/gt/gte/lt/lte/contains/startsWith + mode, OR/AND/NOT, one-level relation filters
+// in/notIn/not/gt/gte/lt/lte/case-insensitive contains/startsWith, OR/AND/NOT, one-level relation filters
 // declared in RELATIONS), orderBy, skip/take, select (trims fields like Prisma does), count,
 // create/createMany/update (incl. increment/decrement)/updateMany/delete/deleteMany, groupBy,
 // aggregate, compound unique keys (a_b) and $transaction. Unsupported operators throw so a test
@@ -55,9 +55,8 @@ export function createSocialDb({ now = () => new Date() } = {}) {
           case 'in': return x.includes(value);
           case 'notIn': return !x.includes(value);
           case 'not': return !cond(value, x);
-          case 'mode': return true;
-          case 'contains': return value != null && (c.mode === 'insensitive' ? String(value).toLowerCase().includes(String(x).toLowerCase()) : String(value).includes(x));
-          case 'startsWith': return value != null && String(value).startsWith(x);
+          case 'contains': return value != null && String(value).toLowerCase().includes(String(x).toLowerCase());
+          case 'startsWith': return value != null && String(value).toLowerCase().startsWith(String(x).toLowerCase());
           case 'gt': return value != null && value > x;
           case 'gte': return value != null && value >= x;
           case 'lt': return value != null && value < x;

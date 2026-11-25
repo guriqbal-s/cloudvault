@@ -26,8 +26,8 @@ async function start() {
   await prisma.$connect().catch((err) => {
     throw new Error(
       `Cannot connect to the database (${err.message}). Check DATABASE_URL in .env, then run ` +
-        '"npm run db:check" for a diagnosis (RDS: security group, public access, sslmode=require). ' +
-        'Have you run "npm run db:setup"?'
+        '"npm run db:check" to check MySQL connectivity and TLS. ' +
+        'See docs/aws-rds-setup.md for RDS setup.'
     );
   });
   await prepareLocalStorage();

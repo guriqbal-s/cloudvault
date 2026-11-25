@@ -11,7 +11,7 @@ export function createActivityQueryService({ db }) {
     if (action) where.action = action;
     if (resourceType) where.resourceType = resourceType;
     if (from || to) where.createdAt = { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) };
-    if (q) where.OR = [{ description: { contains: q, mode: 'insensitive' } }, { resourceName: { contains: q, mode: 'insensitive' } }];
+    if (q) where.OR = [{ description: { contains: q } }, { resourceName: { contains: q } }];
     return where;
   }
 

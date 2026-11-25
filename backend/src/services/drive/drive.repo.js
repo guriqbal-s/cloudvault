@@ -10,8 +10,8 @@
 //               versionCount, currentVersion }
 //   FolderRow { id, name, ownerId, parentId, path, createdAt, updatedAt, deletedAt, trashBatchId, owner:{id,name} }
 //
-// Concurrency notes: name uniqueness is enforced by the partial unique indexes in extras.sql
-// (P2002 -> NAME_TAKEN); quota is claimed with one conditional UPDATE (no read-modify-write).
+// Live sibling names are unique in the database (P2002 -> NAME_TAKEN).
+// Quota reservations lock the owner row until the transaction commits.
 
 import ApiError from '../../utils/ApiError.js';
 import { ancestorIds } from '../access.logic.js';
@@ -76,7 +76,7 @@ export function createDriveRepo(client) {
     },
     async listLiveSubfolders(ownerId, parentId, { q } = {}) {
       return client.folder.findMany({
-        where: { ownerId, parentId, deletedAt: null, ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}) },
+        where: { ownerId, parentId, deletedAt: null, ...(q ? { name: { contains: q } } : {}) },
         include: folderInclude,
         orderBy: { name: 'asc' },
       });
@@ -95,11 +95,11 @@ export function createDriveRepo(client) {
     async moveFolderSubtree({ id, ownerId, oldPath, newPath, newParentId, name }) {
       return uniqueAsNameTaken(name, () => atomically(async (tx) => {
         await tx.$executeRaw`
-          UPDATE "folders"
-             SET "path" = ${newPath} || substr("path", ${oldPath.length + 1}::int), "updatedAt" = (now() AT TIME ZONE 'UTC')
-           WHERE "ownerId" = ${ownerId}::uuid
-             AND "path" LIKE ${`${oldPath}%`}
-             AND "id" <> ${id}::uuid`;
+          UPDATE folders
+             SET path = CONCAT(${newPath}, SUBSTRING(path, ${oldPath.length + 1})), updatedAt = UTC_TIMESTAMP(3)
+           WHERE ownerId = ${ownerId}
+             AND path LIKE ${`${oldPath}%`}
+             AND id <> ${id}`;
         return tx.folder.update({
           where: { id }, data: { parentId: newParentId, path: newPath, ...(name ? { name } : {}) }, include: folderInclude,
         });
@@ -129,7 +129,7 @@ export function createDriveRepo(client) {
     async listLiveFiles(ownerId, folderId, { q, extensions, sort, skip, take }) {
       const where = {
         ownerId, folderId, deletedAt: null,
-        ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
+        ...(q ? { name: { contains: q } } : {}),
         ...(extensions ? { extension: { in: extensions } } : {}),
       };
       const [rows, total] = await Promise.all([
@@ -157,7 +157,7 @@ export function createDriveRepo(client) {
     },
     /** Raw on purpose: a Prisma update would also bump the @updatedAt ("last modified") column. */
     async touchFileAccessed(id, at) {
-      await client.$executeRaw`UPDATE "files" SET "lastAccessedAt" = (${new Date(at).toISOString()}::timestamptz AT TIME ZONE 'UTC') WHERE "id" = ${id}::uuid`;
+      await client.$executeRaw`UPDATE files SET lastAccessedAt = ${new Date(at)} WHERE id = ${id}`;
     },
 
     // ---------------------------------------------------------- versions
@@ -199,19 +199,23 @@ export function createDriveRepo(client) {
     },
 
     // ------------------------------------------------------------- quota
-    /** One conditional UPDATE: succeeds only if the new total still fits. */
+    /** Reserve space while holding the owner's row lock. */
     async reserveQuota(userId, bytes) {
-      const rows = await client.$queryRaw`
-        UPDATE "users" SET "storageUsedBytes" = "storageUsedBytes" + ${bytes}::bigint
-         WHERE "id" = ${userId}::uuid AND "storageUsedBytes" + ${bytes}::bigint <= "storageQuotaBytes"
-        RETURNING "storageUsedBytes" AS used, "storageQuotaBytes" AS quota`;
-      if (!rows.length) return { ok: false };
-      return { ok: true, used: BigInt(rows[0].used), quota: BigInt(rows[0].quota) };
+      return atomically(async (tx) => {
+        const [user] = await tx.$queryRaw`
+          SELECT storageUsedBytes AS used, storageQuotaBytes AS quota FROM users WHERE id = ${userId} FOR UPDATE`;
+        if (!user) return { ok: false };
+        const used = BigInt(user.used) + BigInt(bytes);
+        const quota = BigInt(user.quota);
+        if (used > quota) return { ok: false };
+        await tx.$executeRaw`UPDATE users SET storageUsedBytes = ${used} WHERE id = ${userId}`;
+        return { ok: true, used, quota };
+      });
     },
     async releaseQuota(userId, bytes) {
       await client.$executeRaw`
-        UPDATE "users" SET "storageUsedBytes" = GREATEST(0, "storageUsedBytes" - ${bytes}::bigint)
-         WHERE "id" = ${userId}::uuid`;
+        UPDATE users SET storageUsedBytes = GREATEST(0, storageUsedBytes - ${bytes})
+         WHERE id = ${userId}`;
     },
     async getUserQuota(userId) {
       const u = await client.user.findUnique({ where: { id: userId }, select: { storageUsedBytes: true, storageQuotaBytes: true } });
@@ -325,7 +329,12 @@ export function createDriveRepo(client) {
     async deleteRows({ fileIds, folderIds }) {
       await atomically(async (tx) => {
         if (fileIds.length) await tx.file.deleteMany({ where: { id: { in: fileIds } } });
-        if (folderIds.length) await tx.folder.deleteMany({ where: { id: { in: folderIds } } });
+        if (folderIds.length) {
+          // Delete deepest folders first to stay within InnoDB's cascade depth limit.
+          const folders = await tx.folder.findMany({ where: { id: { in: folderIds } }, select: { id: true, path: true } });
+          folders.sort((a, b) => b.path.length - a.path.length);
+          for (const folder of folders) await tx.folder.deleteMany({ where: { id: folder.id } });
+        }
       });
     },
 
@@ -382,7 +391,7 @@ export function createDriveRepo(client) {
       });
       const paths = shares.map((s) => s.folder.path);
       const created = from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {};
-      const byName = q ? { name: { contains: q, mode: 'insensitive' } } : {};
+      const byName = q ? { name: { contains: q } } : {};
       const byOwner = ownerId ? { ownerId } : {};
 
       const fileWhere = {

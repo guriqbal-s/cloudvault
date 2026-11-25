@@ -93,7 +93,7 @@ export function createProfileService({ db, storage, activity, logger = console }
     const term = String(q ?? '').trim();
     if (term.length < 2) return [];
     return db.user.findMany({
-      where: { status: 'ACTIVE', id: { not: actor.id }, OR: [{ name: { contains: term, mode: 'insensitive' } }, { email: { contains: term, mode: 'insensitive' } }] },
+      where: { status: 'ACTIVE', id: { not: actor.id }, OR: [{ name: { contains: term } }, { email: { contains: term } }] },
       orderBy: [{ name: 'asc' }],
       take: 8,
       select: { id: true, name: true, email: true },

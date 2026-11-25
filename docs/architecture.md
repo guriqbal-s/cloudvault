@@ -2,7 +2,7 @@
 
 ## Overview
 ```
- Browser (React SPA, Vite :5173) ──/api, /socket.io proxy──▶ Express API (:4000) ──▶ PostgreSQL (Prisma)
+ Browser (React SPA, Vite :5173) ──/api, /socket.io proxy──▶ Express API (:4000) ──▶ MySQL (Prisma)
         │  access JWT in memory                               │  └─▶ StorageProvider (local disk ./storage)
         └─ refresh cookie cv_rt (httpOnly, /api/v1/auth)      └─▶ Socket.IO (notification:new), node-cron jobs
 ```

@@ -119,7 +119,7 @@ export function createAdminService({ db, hasher, storage, activity, notification
   async function listUsers({ q, status, role, page = 1, limit = 25, sort } = {}) {
     const where = {};
     if (status) where.status = status;
-    if (q) where.OR = [{ name: { contains: q, mode: 'insensitive' } }, { email: { contains: q, mode: 'insensitive' } }];
+    if (q) where.OR = [{ name: { contains: q } }, { email: { contains: q } }];
     if (role) {
       const [r] = await resolveRoles([role]).catch(() => []);
       const ids = r ? (await db.userRole.findMany({ where: { roleId: r.id } })).map((l) => l.userId) : [];

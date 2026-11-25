@@ -1,5 +1,5 @@
 // In-memory implementation of the drive repository plus fake storage, so the drive logic
-// (folders, files, versions, trash, library) is tested without PostgreSQL. It mirrors the
+// (folders, files, versions, trash, library) is tested without a database. It mirrors the
 // database behaviour the logic relies on: unique live names, conditional quota updates,
 // transactions that roll back, cascade deletes.
 
