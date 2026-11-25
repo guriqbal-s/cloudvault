@@ -15,12 +15,13 @@ DATABASE_URL="mysql://YOUR_DB_USER:YOUR_DB_PASSWORD@database-1.cryam8ioiwyg.eu-n
 ## Apply the schema
 
 ```bash
-npm run db:setup:prod
+npm run db:setup
+# then run database/create-admins.sql to create the Super Admin and Admin accounts
 npm run db:check
 npm run dev          # or: npm run docker:up  (http://localhost:8080)
 ```
 
-`db:setup:prod` applies the checked-in MySQL migrations and seeds roles and permissions. The migration user needs schema change privileges and permission to create the database if it is missing. You can also set the initial database name when provisioning RDS.
+`db:setup` applies the checked-in MySQL migrations and seeds roles and permissions. The migration user needs schema change privileges and permission to create the database if it is missing. You can also set the initial database name when provisioning RDS.
 
 The MySQL migration initializes a new schema. Moving data from an existing PostgreSQL installation requires a separate data import.
 

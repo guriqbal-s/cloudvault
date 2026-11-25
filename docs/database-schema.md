@@ -23,5 +23,5 @@ Prisma models live in `prisma/schema.prisma`. The initial MySQL migration define
 - CHECK constraints enforce non-negative sizes and quotas, positive version numbers, valid share targets, and no self-sharing.
 - The prefix index on folder paths supports subtree lookup. Name search uses MySQL case-insensitive substring matching.
 
-## Demo seed
-`npm run db:seed`: 5 roles, 27 permissions, accounts `superadmin|admin|manager|alice|bob|viewer|suspended|pending@cloudvault.dev`, password `CloudVault#2026`, sample folders, files, shares and activity.
+## Seed
+`npm run db:seed`: 5 roles and 27 permissions only, no users or files. Create the Super Admin and Admin accounts with [database/create-admins.sql](../database/create-admins.sql).

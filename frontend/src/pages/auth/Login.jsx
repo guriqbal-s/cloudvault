@@ -69,11 +69,6 @@ export default function Login() {
         <div className="flex justify-end"><Link to="/forgot-password" className="text-sm font-semibold text-brand hover:underline">Forgot password?</Link></div>
         <Button type="submit" size="lg" className="w-full" loading={pending}>Sign in</Button>
       </form>
-      {import.meta.env.DEV && (
-        <p className="mt-6 rounded-xl border border-dashed border-border px-4 py-3 text-xs text-content-muted">
-          Demo (after <code className="font-mono">npm run db:setup</code>): <code className="font-mono">alice@cloudvault.dev</code> / <code className="font-mono">CloudVault#2026</code>
-        </p>
-      )}
     </AuthCard>
   );
 }

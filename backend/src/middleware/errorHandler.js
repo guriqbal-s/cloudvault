@@ -61,16 +61,19 @@ export function normalizeError(err) {
 export function errorHandler(err, req, res, _next) {
   const known = normalizeError(err);
   const apiError = known ?? ApiError.internal();
+  const path = req.originalUrl.split('?')[0]; // never log query strings (tokens, search terms)
 
   if (!known) {
-    logger.error(`Unhandled error on ${req.method} ${req.originalUrl}:`, err);
+    logger.error(`Unhandled error on ${req.method} ${path}:`, err);
   } else if (apiError.statusCode >= 500) {
-    logger.error(`${apiError.code} on ${req.method} ${req.originalUrl}:`, err);
+    logger.error(`${apiError.code} on ${req.method} ${path}:`, err);
   }
 
   if (res.headersSent) return res.end();
 
   const body = { success: false, error: { code: apiError.code, message: apiError.message } };
+  // Lets users quote an id to support that matches the server log line.
+  if (apiError.statusCode >= 500 && req.id) body.error.requestId = req.id;
   if (apiError.details !== undefined) body.error.details = apiError.details;
   return res.status(apiError.statusCode).json(body);
 }

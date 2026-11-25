@@ -47,13 +47,13 @@ treated as theft: the whole token family and its session are revoked.
 72 bytes (bcrypt silently ignores anything longer, so longer input is rejected rather than truncated).
 
 **In development, emails are printed to the API console** when `SMTP_HOST` is empty. Copy the
-verification or reset link from there. Demo accounts are already verified.
+verification or reset link from there. Accounts created with `database/create-admins.sql` are already verified.
 
 Try it (replace the token and cookie jar as needed):
 
 ```bash
 curl -i -c jar.txt -H 'Content-Type: application/json' \
-  -d '{"email":"alice@cloudvault.dev","password":"CloudVault#2026"}' \
+  -d '{"email":"admin@cloudvault.dev","password":"<your password>"}' \
   http://localhost:4000/api/v1/auth/login
 
 curl -H "Authorization: Bearer <accessToken>" http://localhost:4000/api/v1/auth/me

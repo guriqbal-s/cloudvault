@@ -1,0 +1,17 @@
+# Public edge for production (compose.prod.yaml). Caddy obtains and renews the TLS
+# certificate for DOMAIN automatically and redirects HTTP to HTTPS.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	reverse_proxy web:80 {
+		# Stream uploads, downloads and Socket.IO without buffering
+		flush_interval -1
+	}
+}

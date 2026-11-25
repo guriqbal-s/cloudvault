@@ -1,7 +1,10 @@
 # CloudVault with Docker.
 #
 #   npm run docker:up                migrate once, then redis + N api replicas + nginx (web)
-#                                    -> http://localhost:8080 (WEB_PORT in .env)
+#                                    -> http://localhost:8080 (WEB_PORT in .env). Plain HTTP:
+#                                    for trying the containers locally, not for the internet.
+#   npm run prod:up                  production: this file + compose.prod.yaml (HTTPS via Caddy,
+#                                    NODE_ENV=production). See docs/deployment.md.
 #   API_REPLICAS=4 npm run docker:up scale the API horizontally (default 2)
 #   npm run dev:local                local development: starts only the "mysql" service below
 #
@@ -14,11 +17,18 @@ x-api: &api
     target: api
   image: cloudvault-api
   env_file: .env
+  # tini as PID 1: forwards SIGTERM for graceful shutdown and reaps zombie processes
+  init: true
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '5'
   environment: &api-env
     # Container-specific overrides; everything else comes from .env
     NODE_ENV: ${DOCKER_NODE_ENV:-development}
     PORT: '4000'
-    # Public address of the app; set PUBLIC_URL to your https:// domain in production
+    # Public address of the app. compose.prod.yaml sets https://$DOMAIN for production
     CLIENT_URL: ${PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}
     TRUST_PROXY: 'true'
     STORAGE_ROOT: /app/storage
@@ -26,10 +36,14 @@ x-api: &api
     REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
 
 services:
-  # Applies pending Prisma migrations once, before any api replica starts.
+  # Runs once, before any api replica starts.
+  # Applies pending Prisma migrations and seeds roles/permissions (idempotent).
   migrate:
     <<: *api
-    command: ['npx', 'prisma', 'migrate', 'deploy', '--schema', 'prisma/schema.prisma']
+    build:
+      context: .
+      target: migrate
+    image: cloudvault-migrate
     restart: 'no'
 
   api:
@@ -59,6 +73,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging: *logging
     restart: unless-stopped
 
   web:
@@ -71,6 +86,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    logging: *logging
     restart: unless-stopped
 
   # Local MySQL for development only. Not started by "docker compose up" (profile), but

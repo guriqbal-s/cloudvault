@@ -23,8 +23,8 @@ console.log('\n> Applying migrations...');
 run('npm run db:deploy -w backend');
 
 if (!process.argv.includes('--no-seed')) {
-  console.log('\n> Seeding...');
-  run(`node prisma/seed.js${process.argv.includes('--core') ? ' --core' : ''}`);
+  console.log('\n> Seeding roles and permissions...');
+  run('node prisma/seed.js');
 }
 
 console.log('\nDatabase ready.');

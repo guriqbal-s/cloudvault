@@ -7,3 +7,5 @@ export const getHealth = asyncHandler(async (_req, res) => {
   const { ok, ...report } = await checkHealth();
   return res.status(ok ? 200 : 503).json({ success: ok, data: report });
 });
+
+export const getLiveness = (_req, res) => res.status(200).json({ success: true, data: { status: 'ok' } });

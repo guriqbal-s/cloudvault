@@ -28,7 +28,11 @@ const schema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: int(4000, { min: 1 }),
     CLIENT_URL: z.string().url().default('http://localhost:5173'),
-    TRUST_PROXY: bool(false),
+    // How many reverse proxies sit in front of the API: false/0 = none, true = 1, or a number
+    // (e.g. 2 for Caddy -> nginx -> api). Decides which X-Forwarded-For entry is the client IP.
+    TRUST_PROXY: z
+      .preprocess(blankToUndefined, z.string().regex(/^(true|false|\d+)$/, 'must be true, false or a number of proxy hops').default('false'))
+      .transform((v) => (v === 'true' ? 1 : v === 'false' ? 0 : Number(v))),
 
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
     // Optional. Set to run more than one API instance (shared rate limits, sockets, job locks).
@@ -81,13 +85,23 @@ const schema = z
         }
       }
     }
+    if (v.STORAGE_DRIVER === 's3') {
+      ctx.addIssue({ code: 'custom', path: ['STORAGE_DRIVER'], message: 's3 is not implemented yet; use cloudinary or local' });
+    }
     if (v.NODE_ENV !== 'production') return;
+
+    // Production refuses to start on settings that would silently break security or core flows.
+    const issue = (field, message) => ctx.addIssue({ code: 'custom', path: [field], message });
     if (v.JWT_ACCESS_SECRET.startsWith('change-me') || v.JWT_ACCESS_SECRET.length < 32) {
-      ctx.addIssue({ code: 'custom', path: ['JWT_ACCESS_SECRET'], message: 'production requires a random secret of 32+ characters' });
+      issue('JWT_ACCESS_SECRET', 'production requires a random secret of 32+ characters (openssl rand -hex 64)');
     }
-    if (!v.COOKIE_SECURE) {
-      ctx.addIssue({ code: 'custom', path: ['COOKIE_SECURE'], message: 'must be true in production (HTTPS only cookies)' });
+    if (!v.COOKIE_SECURE) issue('COOKIE_SECURE', 'must be true in production (HTTPS only cookies)');
+    if (!v.CLIENT_URL.startsWith('https://')) issue('CLIENT_URL', 'must be the https:// address of the app in production');
+    if (!v.SMTP_HOST) {
+      issue('SMTP_HOST', 'production needs real email delivery: without it, sign-up verification and password reset links are never sent');
     }
+    if (v.MAIL_FROM.includes('.local>')) issue('MAIL_FROM', 'set a sender address on a domain your SMTP provider has verified');
+    if (v.BCRYPT_ROUNDS < 10) issue('BCRYPT_ROUNDS', 'must be at least 10 in production');
   });
 
 const parsed = schema.safeParse(process.env);

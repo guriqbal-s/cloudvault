@@ -21,7 +21,8 @@ export { API_PREFIX };
 const app = express();
 
 app.disable('x-powered-by');
-if (env.trustProxy) app.set('trust proxy', 1); // needed for correct client IPs behind nginx/ALB
+// Number of proxy hops in front of the API (nginx, ALB, Caddy...); needed for correct client IPs.
+if (env.trustProxy) app.set('trust proxy', env.trustProxy);
 app.set('json replacer', jsonReplacer); // Prisma BigInt -> number/string
 
 // This server only returns JSON and file bytes, so the CSP is "nothing may load or run".

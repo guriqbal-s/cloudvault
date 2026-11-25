@@ -47,5 +47,5 @@ Local setup complete.
 
   Start everything:   npm run dev:local
   Open:               http://localhost:5173
-  Sign in as:         alice@cloudvault.dev  /  CloudVault#2026
+  Create admins:      run database/create-admins.sql (see README)
 `);

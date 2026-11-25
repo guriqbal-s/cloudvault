@@ -1,0 +1,56 @@
+# Production overlay: used together with compose.yaml.
+#
+#   npm run prod:up      = docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+#
+# Adds Caddy in front of nginx for automatic HTTPS (Let's Encrypt) on DOMAIN and switches the
+# API to production mode, which refuses to start on unsafe settings (see backend/src/config/env.js).
+# Requires in .env: DOMAIN, ACME_EMAIL, plus the production values listed in docs/deployment.md.
+#
+#   Internet ─► caddy :80/:443 (TLS, HSTS) ─► web (nginx: SPA + load balancer) ─► api replicas
+#
+# The DNS A/AAAA record for DOMAIN must point at this host, and ports 80 and 443 must be open,
+# before the first start, or the certificate request fails.
+
+x-prod-api-env: &prod-api-env
+  NODE_ENV: production
+  CLIENT_URL: https://${DOMAIN:?Set DOMAIN in .env (e.g. files.example.com)}
+  COOKIE_SECURE: 'true'
+  # Caddy -> nginx -> api: two proxies in front of the API
+  TRUST_PROXY: '2'
+
+services:
+  migrate:
+    environment: *prod-api-env
+
+  api:
+    environment: *prod-api-env
+
+  web:
+    # Only Caddy talks to nginx; nothing is published on the host.
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.10-alpine
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp' # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env (Let's Encrypt expiry notices)}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates: keep this volume, or you will hit Let's Encrypt rate limits
+      - caddy-config:/config
+    depends_on:
+      - web
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

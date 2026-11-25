@@ -5,7 +5,7 @@
   "type": "module",
   "description": "CloudVault - full-stack cloud file storage and management platform",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=22"
   },
   "workspaces": [
     "backend",
@@ -18,6 +18,10 @@
     "docker:up": "docker compose up --build -d api web",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f api web",
+    "prod:up": "docker compose -f compose.yaml -f compose.prod.yaml up --build -d",
+    "prod:down": "docker compose -f compose.yaml -f compose.prod.yaml down",
+    "prod:logs": "docker compose -f compose.yaml -f compose.prod.yaml logs -f api web caddy",
+    "prod:config": "docker compose -f compose.yaml -f compose.prod.yaml config --quiet",
     "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "dev:api": "npm run dev -w backend",
     "dev:web": "npm run dev -w frontend",
@@ -29,11 +33,9 @@
     "db:deploy": "npm run db:deploy -w backend",
     "db:seed": "node prisma/seed.js",
     "hash-password": "node scripts/hash-password.js",
-    "db:seed:core": "node prisma/seed.js --core",
     "db:reset": "npm run db:reset -w backend && node prisma/seed.js",
     "db:studio": "npm run db:studio -w backend",
     "test": "npm test -w backend",
-    "db:setup:prod": "node prisma/scripts/db-setup.js --core",
     "start": "npm run start -w backend",
     "postinstall": "prisma generate --schema prisma/schema.prisma"
   },

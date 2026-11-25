@@ -32,7 +32,7 @@ SET NAMES utf8mb4 COLLATE utf8mb4_0900_as_ci;
 -- -------------------------------------------------------------------------------------
 -- A. The lookup the login page triggers (read only)
 -- -------------------------------------------------------------------------------------
-SET @email = LOWER(TRIM('alice@cloudvault.dev'));
+SET @email = LOWER(TRIM('user@example.com'));
 
 SELECT u.id, u.email, u.name, u.status, u.emailVerifiedAt, u.lastLoginAt,
        GROUP_CONCAT(r.name ORDER BY r.`rank` DESC) AS roles
@@ -47,17 +47,18 @@ GROUP BY u.id;
 -- B. Create a user who can sign in on the login page
 -- -------------------------------------------------------------------------------------
 -- 1. Make the password hash:   npm run hash-password -- "YourPassword#2026"
--- 2. Paste it into @password_hash. The hash below is for the password  CloudVault#2026
+-- 2. Paste it into @password_hash (the insert is skipped while it is still the placeholder)
 -- 3. Role is one of: Super Admin, Admin, Manager, Standard User, Viewer
 SET @email         = LOWER(TRIM('newuser@example.com'));
 SET @name          = 'New User';
-SET @password_hash = '$2b$12$kkGnDO/HbH5HqRZcMlc6EOYPf3LRvrdcQ5Yav4Rjw9ftVaz1WjdRC';
+SET @password_hash = 'PASTE_BCRYPT_HASH_HERE';
 SET @role          = 'Standard User';
 SET @user_id       = UUID();
 
 START TRANSACTION;
 INSERT INTO users (id, email, name, passwordHash, status, emailVerifiedAt, storageQuotaBytes, updatedAt)
-VALUES (@user_id, @email, @name, @password_hash, 'ACTIVE', NOW(3), 5368709120, NOW(3));
+SELECT @user_id, @email, @name, @password_hash, 'ACTIVE', NOW(3), 5368709120, NOW(3)
+FROM DUAL WHERE @password_hash LIKE '$2%';
 
 INSERT INTO user_roles (userId, roleId)
 SELECT @user_id, id FROM roles WHERE name = @role;
@@ -68,7 +69,7 @@ COMMIT;
 -- -------------------------------------------------------------------------------------
 -- C. "Please verify your email" on login -> mark the email as verified
 -- -------------------------------------------------------------------------------------
-SET @email = LOWER(TRIM('pending@cloudvault.dev'));
+SET @email = LOWER(TRIM('user@example.com'));
 
 UPDATE users
 SET status = 'ACTIVE', emailVerifiedAt = COALESCE(emailVerifiedAt, NOW(3)), updatedAt = NOW(3)
@@ -80,7 +81,7 @@ WHERE email = @email AND status = 'PENDING_VERIFICATION';
 -- -------------------------------------------------------------------------------------
 -- Make the hash with:  npm run hash-password -- "NewPassword#2026"
 -- Existing sessions are signed out, just like a reset through the app.
-SET @email         = LOWER(TRIM('alice@cloudvault.dev'));
+SET @email         = LOWER(TRIM('user@example.com'));
 SET @password_hash = 'PASTE_BCRYPT_HASH_HERE';
 
 START TRANSACTION;
@@ -98,7 +99,7 @@ COMMIT;
 -- -------------------------------------------------------------------------------------
 -- E. Block or unblock sign-in (suspend / reactivate)
 -- -------------------------------------------------------------------------------------
-SET @email = LOWER(TRIM('suspended@cloudvault.dev'));
+SET @email = LOWER(TRIM('user@example.com'));
 
 -- Suspend: login is refused and every open session is ended
 -- START TRANSACTION;
@@ -130,7 +131,7 @@ COMMIT;
 -- -------------------------------------------------------------------------------------
 -- G. Sign a user out everywhere
 -- -------------------------------------------------------------------------------------
-SET @email = LOWER(TRIM('alice@cloudvault.dev'));
+SET @email = LOWER(TRIM('user@example.com'));
 
 UPDATE user_sessions s JOIN users u ON u.id = s.userId
 SET s.revokedAt = NOW(3), s.updatedAt = NOW(3)
